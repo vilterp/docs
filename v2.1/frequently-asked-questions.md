@@ -164,9 +164,17 @@ For more details, see the [Managed CockroachDB](../managed/v2.1/) docs.
 
 {% include {{ page.version.version }}/faq/simulate-key-value-store.html %}
 
+## I need to delete a large amount of data. I'm iteratively deleting a certain number of rows using a LIMIT clause, but it's getting slower over time. Why?
+
+Cockroachdb is a key value store that relies on multi-version concurrency control (MVCC) to process concurrent requests and guarantee consistency. As such, when you delete a row it is not immediately removed from disk. The MVCC values for the row will remain until the garbage collection period (GC interval) has passed. This is 25 hours by defualt.
+
+This means that by default, each iteration of the command must scan over the rows marked for deletion within the last 25 hours. So if you try to delete 10,000 rows 10 times within the same 25 hour period, the 10th command will have to scan over the previous 90,000 rows.
+
+If you need to iteratively delete rows in constant time, you can [alter your zone configuration](https://www.cockroachlabs.com/docs/stable/configure-replication-zones.html#overview) and change the GC Interval to a low value like 5 minutes, and run your delete once per GC interval. We recommend returning the interval to the default of 25 hours after your clean up is complete.
+
 ## Have questions that weren’t answered?
 
 - [CockroachDB Community Forum](https://forum.cockroachlabs.com): Ask questions, find answers, and help other users.
-- [Join us on Gitter](https://gitter.im/cockroachdb/cockroach): This is the most immediate way to connect with CockroachDB engineers. To open Gitter without leaving these docs, click **Chat with Developers** in the lower-right corner of any page.
+- [File a support ticket](https://support.cockroachlabs.com): Contact CockroachDB support privately.
 - [SQL FAQs](sql-faqs.html): Get answers to frequently asked questions about CockroachDB SQL.
 - [Operational FAQS](operational-faqs.html): Get answers to frequently asked questions about operating CockroachDB.
