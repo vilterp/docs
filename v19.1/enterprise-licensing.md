@@ -16,6 +16,8 @@ Feature | Description
 [Change Data Capture](change-data-capture.html) | Change data capture (CDC) provides efficient, distributed, row-level [change feeds into Apache Kafka](create-changefeed.html) for downstream processing such as reporting, caching, or full-text indexing.
 [Cluster Visualization](enable-node-map.html) | The **Node Map** visualizes the geographical configuration of a multi-regional cluster by plotting the node localities on a world map.
 [Table Partitioning](partitioning.html) | CockroachDB allows you to define table partitions, thus giving you row-level control of how and where your data is stored. Partitioning enables you to reduce latencies and costs and can assist in meeting regulatory requirements for your data.
+[Cost-based optimizer: Prefer the nearest index based on locality](#preferring-the-nearest-index-based-on-node-locality) | XXX
+[Cost-based optimizer: Prefer the nearest index based on leaseholder preferences](#preferring-the-nearest-index-based-on-leaseholder-preferences) | XXX
 
 ## Types of licenses
 

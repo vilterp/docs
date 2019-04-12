@@ -167,14 +167,14 @@ If it is not possible to use the algorithm specified in the hint, an error is si
 
 - Hint usage should be reconsidered with each new release of CockroachDB. Due to improvements in the optimizer, hints specified to work with an older version may cause decreased performance in a newer version.
 
-## Preferring the nearest index
+## Preferring the nearest index based on node locality
 
 <span class="version-tag">New in v19.1</span>: Given multiple identical [indexes](indexes.html) that have different locality constraints using [replication zones](configure-replication-zones.html), the optimizer will prefer the index that is closest to the gateway node that is planning the query. In a properly configured geo-distributed cluster, this can lead to performance improvements due to improved data locality and reduced network traffic.
 
 This feature enables scenarios where reference data such as a table of postal codes can be replicated to different regions, and queries will use the copy in the same region.
 
-{{site.data.alerts.callout_info}}
-The optimizer preferring the nearest index is not an enterprise feature, but in order to take advantage of it you need to be able to [create a replication zone for a secondary index](configure-replication-zones.html#create-a-replication-zone-for-a-secondary-index), which is an [enterprise feature](enterprise-licensing.html).
+{{site.data.alerts.callout_danger}}
+This feature is only available to [enterprise users](enterprise-licensing.html).
 {{site.data.alerts.end}}
 
 To take advantage of this feature, you need to:
@@ -190,7 +190,7 @@ With the above pieces in place, the optimizer will automatically choose the inde
 The optimizer does not actually understand geographic locations, i.e., the relative closeness of the gateway node to other nodes that are located to its "east" or "west". It is matching against the [node locality constraints](configure-replication-zones.html#descriptive-attributes-assigned-to-nodes) you provided when you configured your replication zones.
 {{site.data.alerts.end}}
 
-### Example
+ **Example**
 
 We can demonstrate the necessary configuration steps using a local cluster. The instructions below assume that you are already familiar with:
 
@@ -298,6 +298,161 @@ As expected, the node in the EU uses the `idx_eu` index.
 {% include copy-clipboard.html %}
 ~~~ shell
 $ cockroach sql --insecure --host=localhost --port=26258 --database=test -e 'EXPLAIN SELECT * FROM postal_codes WHERE id=1;'
+~~~
+
+~~~
+  tree | field |     description
++------+-------+---------------------+
+  scan |       |
+       | table | postal_codes@idx_eu
+       | spans | /1-/2
+(3 rows)
+~~~
+
+As expected, the node in APAC uses the `idx_apac` index.
+
+{% include copy-clipboard.html %}
+~~~ shell
+$ cockroach sql --insecure --host=localhost --port=26259 --database=test -e 'EXPLAIN SELECT * FROM postal_codes WHERE id=1;'
+~~~
+
+~~~
+  tree | field |      description
++------+-------+-----------------------+
+  scan |       |
+       | table | postal_codes@idx_apac
+       | spans | /1-/2
+(3 rows)
+~~~
+
+You'll need to make changes to the above configuration to reflect your [production environment](recommended-production-settings.html), but the concepts will be the same.
+
+## Preferring the nearest index based on leaseholder preferences
+
+<span class="version-tag">New in v19.1</span>: The cost-based optimizer will prefer an index having a leaseholder preference that is closest to the gateway node planning the query.  Practically speaking, this allows you to optimize for faster local reads at the expense of higher latency for writes.
+
+{{site.data.alerts.callout_danger}}
+This feature is only available to [enterprise users](enterprise-licensing.html).
+{{site.data.alerts.end}}
+
+Note that this feature works similarly to [Preferring the nearest index](#preferring-the-nearest-index), which uses zone constraints; the difference is that in this case we look at the leaseholder preferences in addition to the locality constraints.  Using this feature, you can have the indexes distributed across all the regions so as to handle region feailures, while pinning the leaseholder to a given region.
+
+### Example - 2
+
+We can demonstrate the necessary configuration steps using a local cluster. The instructions below assume that you are already familiar with:
+
+- How to [Start a local cluster](start-a-local-cluster.html).
+- The syntax for [assigning lease preferences when configuring replication zones](configure-replication-zones.html#lease_preferences).
+- Using [the built-in SQL client](use-the-built-in-sql-client.html).
+
+First, start 3 local nodes as shown below. Use the [`--locality`](start-a-node.html#locality) flag to put them each in a different region as denoted by `region=usa`, `region=eu`, etc.
+
+{% include copy-clipboard.html %}
+~~~ shell
+$ cockroach start --locality=region=us-east-1  --insecure --store=/tmp/node0 --listen-addr=localhost:26257 --http-port=8888  --join=localhost:26257,localhost:26258,localhost:26259 --background
+~~~
+
+{% include copy-clipboard.html %}
+~~~ shell
+$ cockroach start --locality=region=us-east-2   --insecure --store=/tmp/node1 --listen-addr=localhost:26258 --http-port=8889  --join=localhost:26257,localhost:26258,localhost:26259 --background
+~~~
+
+{% include copy-clipboard.html %}
+~~~ shell
+$ cockroach start --locality=region=us-west-1 --insecure --store=/tmp/node2 --listen-addr=localhost:26259 --http-port=8890  --join=localhost:26257,localhost:26258,localhost:26259 --background
+~~~
+
+{% include copy-clipboard.html %}
+~~~ shell
+$ cockroach init --insecure --host=localhost --port=26257
+~~~
+
+Next, from the SQL client, add your organization name and enterprise license:
+
+{% include copy-clipboard.html %}
+~~~ sql
+SET CLUSTER SETTING cluster.organization = 'BarCorp - Local Testing';
+~~~
+
+{% include copy-clipboard.html %}
+~~~ sql
+SET CLUSTER SETTING enterprise.license = 'xxxxx';
+~~~
+
+Create a test database and table. The table will have 3 indexes into the same data. Later, we'll configure the cluster to associate each of these indexes with a different datacenter using replication zones.
+
+{% include copy-clipboard.html %}
+~~~ sql
+CREATE DATABASE IF NOT EXISTS test;
+~~~
+
+{% include copy-clipboard.html %}
+~~~ sql
+USE test;
+~~~
+
+{% include copy-clipboard.html %}
+~~~ sql
+CREATE TABLE auth_token (
+    token_id VARCHAR(100) NULL,
+    access_token VARCHAR(4000) NULL,
+    refresh_token VARCHAR(4000) NULL,
+    INDEX token_id_idx_us_east_1 (token_id) STORING (access_token, refresh_token),
+    INDEX token_id_idx_us_east_2 (token_id) STORING (access_token, refresh_token),
+    INDEX token_id_idx_us_west_1 (token_id) STORING (access_token, refresh_token)
+);
+~~~
+
+Next, we modify the replication zone configuration via SQL so that:
+
+- something
+- something
+- ???
+- PROFIT
+
+{% include copy-clipboard.html %}
+~~~ sql
+> ALTER TABLE auth_token CONFIGURE ZONE USING num_replicas=3, constraints='{"+region=us-east-1": 1, "+region=us-east-2": 1, "+region=us-west-1": 1}', lease_preferences='[["+region=us-west-1"]]';
+~~~
+
+{% include copy-clipboard.html %}
+~~~ sql
+> ALTER INDEX auth_token@token_id_idx_us_east_1 CONFIGURE ZONE USING num_replicas=3, constraints='{"+region=us-east-1": 1, "+region=us-east-2": 1, "+region=us-west-1": 1}', lease_preferences='[["+region=us-east-1"]]';
+~~~
+
+{% include copy-clipboard.html %}
+~~~ sql
+> ALTER INDEX auth_token@token_id_idx_us_east_2 CONFIGURE ZONE USING num_replicas=3, constraints='{"+region=us-east-1": 1, "+region=us-east-2": 1, "+region=us-west-1": 1}', lease_preferences='[["+region=us-east-2"]]';
+~~~
+
+To verify this feature is working as expected, we'll ... XXX
+
+{% include copy-clipboard.html %}
+~~~ sql
+> INSERT INTO auth_token (token_id, access_token, refresh_token) VALUES ('DE32D09E-5C92-11E9-83EA-8E9B5FAC1A65', '5106F0DC-5C93-11E9-9430-508660AC1A65', '581E11F2-5C93-11E9-BA89-568660AC1A65');
+~~~
+
+{% include copy-clipboard.html %}
+~~~ sql
+> INSERT INTO auth_token (token_id, access_token, refresh_token) VALUES ('85748136-5C93-11E9-888B-678660AC1A65', '8AC3048C-5C93-11E9-90C5-6D8660AC1A65', '8FB28A1C-5C93-11E9-81BE-738660AC1A65');
+~~~
+
+XXX
+
+{% include copy-clipboard.html %}
+~~~ sql
+> SELECT access_token FROM auth_token@token_id_idx_us_east_1 WHERE token_id='DE32D09E-5C92-11E9-83EA-8E9B5FAC1A65';
+~~~
+
+~~~
+XXX
+~~~
+
+As expected, the node in the EU uses the `idx_eu` index.
+
+{% include copy-clipboard.html %}
+~~~ sql
+> SELECT access_token FROM auth_token WHERE token_id='DE32D09E-5C92-11E9-83EA-8E9B5FAC1A65';
 ~~~
 
 ~~~
